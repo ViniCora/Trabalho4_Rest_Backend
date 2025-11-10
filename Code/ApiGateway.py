@@ -1,77 +1,176 @@
-from flask import Flask, request, jsonify
-import threading
-import requests
 import json
-from rabbitmq_utils import RabbitMQHelper
+import queue
+import threading
+import time
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+import requests
+from rabbitmq_utils import RabbitMQHelper
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True)
 
 interesses = {}
-MSNotificacoes = RabbitMQHelper(exchange='notificacoes')
+conexoes_sse = {}
+lock = threading.Lock()
+
+MSNotificacoes = RabbitMQHelper(exchange="notificacoes")
 
 
-#Lance invalido, valido e vencedor + TO DO: leilao iniciado/finalizado
+def enviar_evento_sse(usuario, payload):
+    try:
+        with lock:
+            fila = conexoes_sse.get(usuario)
+        if fila:
+            fila.put(json.dumps(payload))
+            print(f"[SSE] Enviado para {usuario} ({payload.get('tipo')})")
+        else:
+            print(f"[SSE] Nenhuma conexão SSE ativa para {usuario}")
+    except Exception as e:
+        print(f"[ERRO SSE] ao enviar para {usuario}: {e}")
+
+
+def montar_mensagem_evento(evento, dados, usuario_destino):
+    tipo = evento
+    id_leilao = dados.get("id_leilao")
+    valor = dados.get("valor")
+    id_usuario = dados.get("id_usuario")
+    vencedor = dados.get("vencedor")
+    valor_vencedor = dados.get("valor_vencedor")
+
+    if tipo == "lance_validado":
+        if id_usuario == usuario_destino:
+            return f"✅ Seu lance de R${valor:.2f} foi validado no leilão {id_leilao}."
+        else:
+            return f"📢 O leilão {id_leilao} recebeu um novo lance de R${valor:.2f}."
+
+    elif tipo == "lance_invalidado":
+        motivo = dados.get("motivo")
+        if id_usuario == usuario_destino:
+            if motivo == "leilao_finalizado":
+                return f"🏁 O leilão {id_leilao} já foi finalizado. Não é possível enviar novos lances."
+            elif motivo == "fora_do_periodo":
+                return f"⏰ O leilão {id_leilao} não está no período ativo."
+            elif motivo == "valor_menor_ou_igual":
+                return f"❌ Seu lance de R${valor:.2f} foi negado, pois é inferior ao último valor no leilão {id_leilao}."
+            else:
+                return f"⚠️ Seu lance no leilão {id_leilao} foi rejeitado (motivo: {motivo})."
+        else:
+            return None
+
+    elif tipo == "leilao_iniciado":
+        return f"🕑 O leilão {id_leilao} foi iniciado!"
+
+    elif tipo == "leilao_finalizado":
+        if vencedor and valor_vencedor:
+            return f"🏁 O leilão {id_leilao} foi finalizado. Ganhador: {vencedor}, com o valor de R${valor_vencedor:.2f}."
+        return f"🏁 O leilão {id_leilao} foi finalizado."
+
+    elif tipo == "leilao_vencedor":
+        if id_usuario == usuario_destino:
+            return f"🏆 Parabéns! Você venceu o leilão {id_leilao} com o valor de R${valor:.2f}."
+        else:
+            return f"📢 O leilão {id_leilao} teve um vencedor: {id_usuario} (R${valor:.2f})."
+
+    else:
+        return f"🔔 Evento {tipo} no leilão {id_leilao}."
+
+
 def callback_notificacoes(ch, method, properties, body):
     evento = method.routing_key
-    dados = json.loads(body)
-    id_leilao = dados.get("id_leilao")
+    try:
+        dados = json.loads(body)
+    except Exception:
+        dados = {"raw": body.decode()}
 
-    if not id_leilao or id_leilao not in interesses:
-        print(f"[AVISO] ID do leilao nao encontrado", dados)
+    id_leilao_raw = dados.get("id_leilao", "")
+    id_leilao = str(id_leilao_raw) if id_leilao_raw is not None else ""
+
+    print(f"[DEBUG] Evento recebido: {evento}")
+    print(f"[DEBUG] Dados: {dados}")
+    print(f"[DEBUG] id_leilao extraído: {id_leilao}")
+    with lock:
+        print(f"[DEBUG] Interesses atuais: {interesses}")
+
+    if not id_leilao:
+        print(f"[AVISO] Evento sem id_leilao: {evento} -> {dados}")
         return
 
-    for cliente in interesses[id_leilao]:
-        print(f"[NOTIFICAÇÃO] Enviando {evento} para cliente {cliente}: {dados}")
+    with lock:
+        interessados = set()
+        interessados |= interesses.get(id_leilao, set())
+        interessados |= interesses.get(str(id_leilao_raw), set())
+
+    if not interessados:
+        print(f"[INFO] Nenhum interessado no leilão {id_leilao}")
+        return
+
+    for user in list(interessados):
+        mensagem = montar_mensagem_evento(evento, dados, user)
+        if not mensagem:
+            continue
+
+        payload = {
+            "tipo": evento,
+            "mensagem": mensagem,
+            "dados": dados,
+            "timestamp": time.time()
+        }
+        enviar_evento_sse(user, payload)
 
 
 def iniciar_consumo_eventos():
     fila = MSNotificacoes.declare_queue(queue='', exclusive=True).method.queue
-    
-    #Valido invalido e vencedor 
-    MSNotificacoes.bind_queue('notificacoes', fila, 'lance_validado')
-    MSNotificacoes.bind_queue('notificacoes', fila, 'lance_invalidado')
-    MSNotificacoes.bind_queue('notificacoes', fila, 'leilao_vencedor')
-
+    MSNotificacoes.bind_queue("notificacoes", fila, "lance_validado")
+    MSNotificacoes.bind_queue("notificacoes", fila, "lance_invalidado")
+    MSNotificacoes.bind_queue("notificacoes", fila, "leilao_vencedor")
+    MSNotificacoes.bind_queue("notificacoes", fila, "link_pagamento")
+    MSNotificacoes.bind_queue("notificacoes", fila, "status_pagamento")
+    print("[RABBITMQ] Iniciando consumo de eventos...")
     MSNotificacoes.receive(fila, callback_notificacoes)
     MSNotificacoes.consume()
 
-
-@app.route("/leiloes", methods=["GET"])
-def listar_leiloes():
-    """Encaminha GET /leiloes para o MS-Leilao."""
-    try:
-        r = requests.get("http://localhost:5000/leiloes")
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
-
-@app.route("/leiloes/<int:id_leilao>", methods=["GET"])
-def obter_leilao_por_id(id_leilao):
-    """Encaminha GET /leiloes/<id> para o MS-Leilao."""
-    try:
-        ms_leilao_id = f"http://localhost:5000/leiloes/{id_leilao}"
-        r = requests.get(ms_leilao_id)
-        return jsonify(r.json()), r.status_code
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
 
 @app.route("/leiloes", methods=["POST"])
 def criar_leilao():
     try:
         dados = request.get_json()
-        r = requests.post("http://localhost:5000/leiloes", json=dados)
+        r = requests.post("http://localhost:5000/leiloes", json=dados, timeout=3)
         return jsonify(r.json()), r.status_code
+    except Exception as e:
+        print(f"[ERRO /leiloes POST] {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/leiloes", methods=["GET"])
+def listar_leiloes():
+    usuario = request.args.get("usuario")
+    try:
+        r_leiloes = requests.get("http://localhost:5000/leiloes", timeout=3)
+        r_lances = requests.get("http://localhost:5001/lances/ultimos", timeout=3)
+
+        if r_leiloes.status_code != 200:
+            return jsonify({"erro": "Falha ao obter leilões"}), 500
+
+        ultimos_lances = r_lances.json() if r_lances.status_code == 200 else {}
+        leiloes = r_leiloes.json()
+
+        for leilao in leiloes:
+            id_str = str(leilao["id_leilao"])
+            leilao["ultimo_lance"] = ultimos_lances.get(id_str)
+            with lock:
+                leilao["interessado"] = usuario in interesses.get(id_str, set()) if usuario else False
+
+        return jsonify(leiloes)
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
 
 @app.route("/lances", methods=["POST"])
-def adicionar_lance():
+def encaminhar_lance():
     try:
         dados = request.get_json()
-        r = requests.post("http://localhost:5001/lances", json=dados)
+        r = requests.post("http://localhost:5001/lances", json=dados, timeout=3)
         return jsonify(r.json()), r.status_code
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
@@ -79,49 +178,47 @@ def adicionar_lance():
 
 @app.route("/interesse", methods=["POST"])
 def registrar_interesse():
-    dados = request.get_json()
-    id_leilao = dados.get("id_leilao")
-    id_cliente = dados.get("id_cliente")
+    data = request.get_json()
+    id_leilao = str(data.get("id_leilao"))
+    usuario = data.get("id_usuario") or data.get("usuario") or data.get("channel")
+    if not id_leilao or not usuario:
+        return jsonify({"erro": "Campos obrigatórios: id_leilao, id_usuario"}), 400
 
-    if not id_leilao or not id_cliente:
-        return jsonify({"erro": "Campos obrigatorios: id_leilao, id_cliente"}), 400
+    with lock:
+        interesses.setdefault(id_leilao, set()).add(usuario)
 
-    interesses.setdefault(id_leilao, set()).add(id_cliente)
-    
-    return jsonify({"status": "interesse_registrado"}), 201
-
-
-@app.route("/interesse/<int:id_leilao>", methods=["GET"])
-def ver_interessados(id_leilao):
-    interessados = list(interesses.get(id_leilao, []))
-    return jsonify({
-        "id_leilao": id_leilao,
-        "interessados": interessados,
-        "total_interessados": len(interessados)
-    }), 200
+    print(f"[INTERESSE] {usuario} inscrito em {id_leilao}")
+    return jsonify({"status": "interesse_registrado"})
 
 
-@app.route("/interesse/cancelar", methods=["POST"])
-def cancelar_interesse():
-    dados = request.get_json()
-    id_leilao = dados.get("id_leilao")
-    id_cliente = dados.get("id_cliente")
-
-    if not id_leilao or not id_cliente:
-        return jsonify({"erro": "Campos obrigatorios: id_leilao, id_cliente"}), 400
-
-    if id_leilao in interesses:
-        interesses[id_leilao].discard(id_cliente)
-
-    return jsonify({"status": "interesse_cancelado"}), 200
+@app.route("/interesse/<usuario>/<int:id_leilao>", methods=["DELETE"])
+def cancelar_interesse(usuario, id_leilao):
+    id_str = str(id_leilao)
+    with lock:
+        if id_str in interesses and usuario in interesses[id_str]:
+            interesses[id_str].discard(usuario)
+            print(f"[INTERESSE] {usuario} cancelou interesse em {id_str}")
+    return jsonify({"status": "interesse_cancelado"})
 
 
-@app.route("/", methods=["GET"])
-def raiz():
-    return jsonify({"mensagem": "API Gateway ativo"}), 200
+@app.route("/sse/<usuario>")
+def sse(usuario):
+    def gerar_eventos():
+        fila = queue.Queue()
+        conexoes_sse[usuario] = fila
+        print(f"[SSE] Conectado: {usuario}")
+        try:
+            while True:
+                evento = fila.get()
+                yield f"data: {evento}\n\n".encode("utf-8")
+        except GeneratorExit:
+            print(f"[SSE] Desconectado: {usuario}")
+            conexoes_sse.pop(usuario, None)
+
+    return Response(gerar_eventos(), mimetype="text/event-stream")
 
 
 if __name__ == "__main__":
     threading.Thread(target=iniciar_consumo_eventos, daemon=True).start()
-    print("API Gateway Flask rodando em http://localhost:8080")
-    app.run(host="0.0.0.0", port=8080)
+    print("Gateway rodando em http://localhost:8080")
+    app.run(host="0.0.0.0", port=8080, threaded=True)

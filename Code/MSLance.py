@@ -50,10 +50,10 @@ def adicionar_lance(lance):
     valor = float(lance["valor"])
     agora = datetime.now()
 
-    #Validar se está ativo - validacao 1
+    # Validar se está ativo - validacao 1
     if id_leilao not in leiloes_ativos:
-        print(f"[INVALIDO] Leilão {id_leilao} não está ativo.")
-        publicar_lance_invalido(lance, motivo="leilao_inativo")
+        print(f"[INVALIDO] Leilão {id_leilao} não está ativo (já finalizado ou inexistente).")
+        publicar_lance_invalido(lance, motivo="leilao_finalizado")
         return False
 
     periodo = leiloes_ativos[id_leilao]
@@ -62,14 +62,14 @@ def adicionar_lance(lance):
         publicar_lance_invalido(lance, motivo="fora_do_periodo")
         return False
 
-    #Validar se o valor é maior que o atual - validacao 2
+    # Validar se o valor é maior que o atual - validacao 2
     atual = lances.get(id_leilao)
     if atual and valor <= atual["valor"]:
         print(f"[INVALIDO] Lance {valor} <= atual ({atual['valor']})")
         publicar_lance_invalido(lance, motivo="valor_menor_ou_igual")
         return False
 
-    #Se passou pelas validações, registra o lance
+    # Se passou pelas validações, registra o lance
     lances[id_leilao] = {"id_usuario": id_usuario, "valor": valor}
     print(f"[VALIDO] Novo lance {valor} registrado para {id_leilao}")
     publicar_lance_validado(lance)
@@ -106,6 +106,13 @@ def endpoint_lances():
 
     except Exception as e:
         return jsonify({"erro": str(e)}), 400
+
+@app.route("/lances/ultimos", methods=["GET"])
+def listar_ultimos_lances():
+    try:
+        return jsonify(lances), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route("/", methods=["GET"])

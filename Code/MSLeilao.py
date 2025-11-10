@@ -8,8 +8,6 @@ import json
 app = Flask(__name__)
 
 leiloes = []
-#MSLeilao = RabbitMQHelper(exchange='leiloes_status')
-
 
 @app.route("/leiloes", methods=["GET"])
 def listar_leiloes():
@@ -63,7 +61,6 @@ def criar_leilao():
 
 @app.route("/leiloes/<int:id_leilao>", methods=["GET"])
 def obter_info_leilao(id_leilao):
-    # Procura o leilão na lista 'leiloes' usando o id_leilao vindo da URL
     leilao_id = next((l for l in leiloes if l["id_leilao"] == id_leilao), None)
 
     if leilao_id:
@@ -78,7 +75,6 @@ def obter_info_leilao(id_leilao):
         return jsonify({"erro": "Leilão não encontrado"}), 404
     
 def monitorar_leiloes():
-
     MSLeilao = RabbitMQHelper(exchange='leiloes_status')
 
     while True:
@@ -90,17 +86,35 @@ def monitorar_leiloes():
                 "data_hora_inicio": leilao["data_hora_inicio"].isoformat(),
                 "data_hora_fim": leilao["data_hora_fim"].isoformat()
             }
+            print(leilao)
 
-            if not leilao["inicio_impresso"] and agora >= leilao["data_hora_inicio"]:
-                MSLeilao.publish(routing_key='leilao_iniciado', body=json.dumps(leilao_serializavel))
-                
-                leilao["inicio_impresso"] = True
-                print(f"Leilão {leilao['id_leilao']} iniciado e notificado.")
+            try:
+                if not leilao["inicio_impresso"] and agora >= leilao["data_hora_inicio"]:
+                    MSLeilao.publish(
+                        routing_key='leilao_iniciado',
+                        body=json.dumps(leilao_serializavel)
+                    )
+                    leilao["inicio_impresso"] = True
+                    print(f"Leilão {leilao['id_leilao']} iniciado e notificado.")
 
-            if not leilao["fim_impresso"] and agora >= leilao["data_hora_fim"]:
-                MSLeilao.publish(routing_key='leilao_finalizado', body=json.dumps(leilao_serializavel))
-                leilao["fim_impresso"] = True
-                print(f"Leilão {leilao['id_leilao']} finalizado e notificado.")
+                if not leilao["fim_impresso"] and agora >= leilao["data_hora_fim"]:
+                    MSLeilao.publish(
+                        routing_key='leilao_finalizado',
+                        body=json.dumps(leilao_serializavel)
+                    )
+                    leilao["fim_impresso"] = True
+                    print(f"Leilão {leilao['id_leilao']} finalizado e notificado.")
+
+            except Exception as e:
+                print(f"Erro ao publicar no RabbitMQ: {e}")
+                # Tenta reconectar se o canal estiver fechado
+                time.sleep(2)
+                try:
+                    MSLeilao = RabbitMQHelper(exchange='leiloes_status')
+                    print("Reconectado ao RabbitMQ com sucesso.")
+                except Exception as erro_reconexao:
+                    print(f"Falha ao reconectar ao RabbitMQ: {erro_reconexao}")
+
         time.sleep(1)
 
 #pika.exceptions.StreamLostError: Stream connection lost
