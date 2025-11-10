@@ -1,8 +1,0 @@
-# Testado e funcionando para 2 clientes e 2 Leilões ao mesmo tempo :)
-
-# Adicionar uma validação caso o leilão tenha expirado e seja enviado um lance para a fila - para recusar 
-    - No doc do trabalho: Aceita o lance se o ID do leilão existir e se o >>leilão estiver ativo<<;
-
-# Perguntar para a professora se ela quer que a gente não coloque uma validação no input do Client 
-    - para caso ele inputar um valor menor do que o maior lancer > entrar na fila e dar [IGNORADO]
-
