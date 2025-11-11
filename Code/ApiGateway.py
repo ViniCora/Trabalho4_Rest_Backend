@@ -16,7 +16,6 @@ lock = threading.Lock()
 
 MSNotificacoes = RabbitMQHelper(exchange="notificacoes")
 
-
 def enviar_evento_sse(usuario, payload):
     try:
         with lock:
@@ -72,6 +71,23 @@ def montar_mensagem_evento(evento, dados, usuario_destino):
         else:
             return f"📢 O leilão {id_leilao} teve um vencedor: {id_usuario} (R${valor:.2f})."
 
+    elif tipo == "link_pagamento":
+        if id_usuario == usuario_destino:
+            link = dados.get("link_pagamento")
+            return f"💳 Seu pagamento está pronto! Acesse o link: {link}"
+        else:
+            return None
+        
+    elif tipo == "status_pagamento":
+        if id_usuario == usuario_destino:
+            status = dados.get("status")
+            if status == "aprovado":
+                return f"✅ Pagamento aprovado! Obrigado por participar do leilão {id_leilao}."
+            else:
+                return f"❌ Pagamento recusado ou não concluído no leilão {id_leilao}."
+        else:
+            return None
+
     else:
         return f"🔔 Evento {tipo} no leilão {id_leilao}."
 
@@ -114,7 +130,8 @@ def callback_notificacoes(ch, method, properties, body):
             "tipo": evento,
             "mensagem": mensagem,
             "dados": dados,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "id_leilao": dados.get("id_leilao")
         }
         enviar_evento_sse(user, payload)
 
@@ -217,6 +234,14 @@ def sse(usuario):
 
     return Response(gerar_eventos(), mimetype="text/event-stream")
 
+@app.route("/pagamentos/iniciar", methods=["POST"])
+def iniciar_pagamento():
+    try:
+        dados = request.get_json()
+        resposta = requests.post("http://localhost:5002/pagamentos/iniciar", json=dados)
+        return jsonify(resposta.json()), resposta.status_code
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 if __name__ == "__main__":
     threading.Thread(target=iniciar_consumo_eventos, daemon=True).start()

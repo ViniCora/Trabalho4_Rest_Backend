@@ -124,9 +124,34 @@ export default function HomePage() {
           showToast(`✅ Lance validado: ${msg}`, "success");
         else if (data.tipo === "lance_invalidado")
           showToast(`❌ Lance inválido: ${msg}`, "error");
-        else if (data.tipo === "leilao_vencedor")
+
+        else if (data.tipo === "leilao_vencedor") {
           showToast(`🏆 ${msg}`, "success");
-        else showToast(msg, "info");
+
+          setTimeout(async () => {
+            const confirmar = window.confirm(
+              "Você ganhou o leilão! Deseja pagar agora?"
+            );
+            // no momento só fecha e não volta/faz nada
+            if (!confirmar) return;
+
+            try {
+              // Chama o microserviço de pagamento
+              const resp = await api.post("/pagamentos/iniciar", {
+              id_leilao: data.id_leilao || "leilao-desconhecido",
+              comprador: usuario,
+              valor: data.valor || 0,
+            });
+
+              const { link_pagamento } = resp.data;
+              window.open(link_pagamento, "_blank");
+              showToast("Abrindo página de pagamento...", "info");
+            } catch (err) {
+              console.error(err);
+              showToast("Erro ao iniciar pagamento", "error");
+            }
+          }, 1500);
+        } else showToast(msg, "info");
 
         if (["lance_validado", "leilao_vencedor"].includes(data.tipo)) {
           carregaLeiloes();
@@ -195,9 +220,7 @@ export default function HomePage() {
               ) : (
                 <p>Sem lances ainda</p>
               )}
-
               <button onClick={() => darLance(l.id_leilao)}>Dar Lance</button>
-
               {l.interessado ? (
                 <button
                   onClick={() => cancelarInteresse(l.id_leilao)}
