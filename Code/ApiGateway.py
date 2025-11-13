@@ -22,11 +22,8 @@ def enviar_evento_sse(usuario, payload):
             fila = conexoes_sse.get(usuario)
         if fila:
             fila.put(json.dumps(payload))
-            print(f"[SSE] Enviado para {usuario} ({payload.get('tipo')})")
-        else:
-            print(f"[SSE] Nenhuma conexão SSE ativa para {usuario}")
     except Exception as e:
-        print(f"[ERRO SSE] ao enviar para {usuario}: {e}")
+        print(f"Erro ao enviar para {usuario}: {e}")
 
 
 def montar_mensagem_evento(evento, dados, usuario_destino):
@@ -39,42 +36,42 @@ def montar_mensagem_evento(evento, dados, usuario_destino):
 
     if tipo == "lance_validado":
         if id_usuario == usuario_destino:
-            return f"✅ Seu lance de R${valor:.2f} foi validado no leilão {id_leilao}."
+            return f"Seu lance de R${valor:.2f} foi validado no leilão {id_leilao}."
         else:
-            return f"📢 O leilão {id_leilao} recebeu um novo lance de R${valor:.2f}."
+            return f"O leilão {id_leilao} recebeu um novo lance de R${valor:.2f}."
 
     elif tipo == "lance_invalidado":
         motivo = dados.get("motivo")
         if id_usuario == usuario_destino:
             if motivo == "leilao_finalizado":
-                return f"🏁 O leilão {id_leilao} já foi finalizado. Não é possível enviar novos lances."
+                return f"O leilão {id_leilao} já foi finalizado. Não é possível enviar novos lances."
             elif motivo == "fora_do_periodo":
-                return f"⏰ O leilão {id_leilao} não está no período ativo."
+                return f"O leilão {id_leilao} não está no período ativo."
             elif motivo == "valor_menor_ou_igual":
-                return f"❌ Seu lance de R${valor:.2f} foi negado, pois é inferior ao último valor no leilão {id_leilao}."
+                return f"Seu lance de R${valor:.2f} foi negado, pois é inferior ao último valor no leilão {id_leilao}."
             else:
-                return f"⚠️ Seu lance no leilão {id_leilao} foi rejeitado (motivo: {motivo})."
+                return f"Seu lance no leilão {id_leilao} foi rejeitado (motivo: {motivo})."
         else:
             return None
 
     elif tipo == "leilao_iniciado":
-        return f"🕑 O leilão {id_leilao} foi iniciado!"
+        return f"O leilão {id_leilao} foi iniciado!"
 
     elif tipo == "leilao_finalizado":
         if vencedor and valor_vencedor:
-            return f"🏁 O leilão {id_leilao} foi finalizado. Ganhador: {vencedor}, com o valor de R${valor_vencedor:.2f}."
-        return f"🏁 O leilão {id_leilao} foi finalizado."
+            return f"O leilão {id_leilao} foi finalizado. Ganhador: {vencedor}, com o valor de R${valor_vencedor:.2f}."
+        return f"O leilão {id_leilao} foi finalizado."
 
     elif tipo == "leilao_vencedor":
         if id_usuario == usuario_destino:
-            return f"🏆 Parabéns! Você venceu o leilão {id_leilao} com o valor de R${valor:.2f}."
+            return f"Parabéns! Você venceu o leilão {id_leilao} com o valor de R${valor:.2f}."
         else:
-            return f"📢 O leilão {id_leilao} teve um vencedor: {id_usuario} (R${valor:.2f})."
+            return f"O leilão {id_leilao} teve um vencedor: {id_usuario} (R${valor:.2f})."
 
     elif tipo == "link_pagamento":
         if id_usuario == usuario_destino:
             link = dados.get("link_pagamento")
-            return f"💳 Seu pagamento está pronto! Acesse o link: {link}"
+            return f"Seu pagamento está pronto! Acesse o link: {link}"
         else:
             return None
         
@@ -82,14 +79,14 @@ def montar_mensagem_evento(evento, dados, usuario_destino):
         if id_usuario == usuario_destino:
             status = dados.get("status")
             if status == "aprovado":
-                return f"✅ Pagamento aprovado! Obrigado por participar do leilão {id_leilao}."
+                return f"Pagamento aprovado! Obrigado por participar do leilão {id_leilao}."
             else:
-                return f"❌ Pagamento recusado ou não concluído no leilão {id_leilao}."
+                return f"Pagamento recusado ou não concluído no leilão {id_leilao}."
         else:
             return None
 
     else:
-        return f"🔔 Evento {tipo} no leilão {id_leilao}."
+        return f"Evento {tipo} no leilão {id_leilao}."
 
 
 def callback_notificacoes(ch, method, properties, body):
@@ -102,11 +99,9 @@ def callback_notificacoes(ch, method, properties, body):
     id_leilao_raw = dados.get("id_leilao", "")
     id_leilao = str(id_leilao_raw) if id_leilao_raw is not None else ""
 
-    print(f"[DEBUG] Evento recebido: {evento}")
-    print(f"[DEBUG] Dados: {dados}")
-    print(f"[DEBUG] id_leilao extraído: {id_leilao}")
+
     with lock:
-        print(f"[DEBUG] Interesses atuais: {interesses}")
+        print(f"Interesses atuais: {interesses}")
 
     if not id_leilao:
         print(f"[AVISO] Evento sem id_leilao: {evento} -> {dados}")
@@ -118,7 +113,6 @@ def callback_notificacoes(ch, method, properties, body):
         interessados |= interesses.get(str(id_leilao_raw), set())
 
     if not interessados:
-        print(f"[INFO] Nenhum interessado no leilão {id_leilao}")
         return
 
     for user in list(interessados):
@@ -204,7 +198,6 @@ def registrar_interesse():
     with lock:
         interesses.setdefault(id_leilao, set()).add(usuario)
 
-    print(f"[INTERESSE] {usuario} inscrito em {id_leilao}")
     return jsonify({"status": "interesse_registrado"})
 
 
@@ -214,7 +207,6 @@ def cancelar_interesse(usuario, id_leilao):
     with lock:
         if id_str in interesses and usuario in interesses[id_str]:
             interesses[id_str].discard(usuario)
-            print(f"[INTERESSE] {usuario} cancelou interesse em {id_str}")
     return jsonify({"status": "interesse_cancelado"})
 
 
@@ -223,13 +215,13 @@ def sse(usuario):
     def gerar_eventos():
         fila = queue.Queue()
         conexoes_sse[usuario] = fila
-        print(f"[SSE] Conectado: {usuario}")
+        print(f"SSE Conectado: {usuario}")
         try:
             while True:
                 evento = fila.get()
                 yield f"data: {evento}\n\n".encode("utf-8")
         except GeneratorExit:
-            print(f"[SSE] Desconectado: {usuario}")
+            print(f"SSE Desconectado: {usuario}")
             conexoes_sse.pop(usuario, None)
 
     return Response(gerar_eventos(), mimetype="text/event-stream")

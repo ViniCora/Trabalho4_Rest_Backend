@@ -29,11 +29,9 @@ def criar_leilao():
         data = request.get_json()
         obrigatorios = ["descricao", "data_hora_inicio", "data_hora_fim"]
 
-        # Verifica se os campos obrigatórios estão presentes
         if not data or not all(campo in data for campo in obrigatorios):
             return jsonify({"erro": "Campos obrigatórios faltando"}), 400
 
-        # Gera o próximo ID automaticamente
         if leiloes:
             ultimo_id = max(l["id_leilao"] for l in leiloes)
             novo_id = ultimo_id + 1
@@ -107,20 +105,16 @@ def monitorar_leiloes():
 
             except Exception as e:
                 print(f"Erro ao publicar no RabbitMQ: {e}")
-                # Tenta reconectar se o canal estiver fechado
                 time.sleep(2)
                 try:
                     MSLeilao = RabbitMQHelper(exchange='leiloes_status')
-                    print("Reconectado ao RabbitMQ com sucesso.")
                 except Exception as erro_reconexao:
                     print(f"Falha ao reconectar ao RabbitMQ: {erro_reconexao}")
 
         time.sleep(1)
 
-#pika.exceptions.StreamLostError: Stream connection lost
-
 if __name__ == "__main__":
     threading.Thread(target=monitorar_leiloes, daemon=True).start()
 
-    print("Servidor Flask MS-Leilao em http://localhost:5000")
+    print("Servidor MS-Leilao em http://localhost:5000")
     app.run(host="0.0.0.0", port=5000)

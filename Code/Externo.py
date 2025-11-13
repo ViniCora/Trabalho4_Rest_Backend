@@ -6,11 +6,8 @@ app = Flask(__name__)
 @app.route("/pagamentos", methods=["POST"])
 def criar_pagamento():
     dados = request.get_json()
-    print(f"[EXTERNO] Pagamento recebido: {dados}")
-
     link = f"https://SistemaPagamento.com/pagar/Leilao={dados['id_leilao']}_&_User={dados['id_usuario']}"
     
-    # simula envio de webhook 5 segundos depois
     def enviar_webhook():
         time.sleep(15)
         payload = {
@@ -20,7 +17,7 @@ def criar_pagamento():
             "status": "aprovado"
         }
         requests.post("http://localhost:5002/webhook", json=payload)
-        print(f"[EXTERNO] Webhook enviado -> {payload}")
+        print(f"Webhook enviado -> {payload}")
 
     threading.Thread(target=enviar_webhook).start()
 

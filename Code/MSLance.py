@@ -14,7 +14,6 @@ MSNotificacao = RabbitMQHelper(exchange='notificacoes')
 
 
 def callback_leilao(ch, method, properties, body):
-    """Recebe eventos de leilão: iniciado e finalizado."""
     evento = method.routing_key
     dados = json.loads(body)
 
@@ -22,7 +21,6 @@ def callback_leilao(ch, method, properties, body):
         inicio = datetime.fromisoformat(dados["data_hora_inicio"])
         fim = datetime.fromisoformat(dados["data_hora_fim"])
         leiloes_ativos[dados["id_leilao"]] = {"inicio": inicio, "fim": fim}
-        print(f"[LEILAO ATIVO] {dados['id_leilao']} entre {inicio} e {fim}")
 
     elif evento == 'leilao_finalizado':
         id_leilao = dados["id_leilao"]
@@ -37,41 +35,30 @@ def callback_leilao(ch, method, properties, body):
                 routing_key='leilao_vencedor',
                 body=json.dumps(mensagem)
             )
-            print(f"[VENCEDOR] Leilão {id_leilao} -> {mensagem}")
-        else:
-            print(f"[FINALIZADO SEM LANCES] {id_leilao}")
         leiloes_ativos.pop(id_leilao, None)
 
 
 def adicionar_lance(lance):
-    """Registra um novo lance, se for válido."""
     id_leilao = lance["id_leilao"]
     id_usuario = lance["id_usuario"]
     valor = float(lance["valor"])
     agora = datetime.now()
 
-    # Validar se está ativo - validacao 1
     if id_leilao not in leiloes_ativos:
-        print(f"[INVALIDO] Leilão {id_leilao} não está ativo (já finalizado ou inexistente).")
         publicar_lance_invalido(lance, motivo="leilao_finalizado")
         return False
 
     periodo = leiloes_ativos[id_leilao]
     if not (periodo["inicio"] <= agora <= periodo["fim"]):
-        print(f"[INVALIDO] Fora do período ativo do leilão {id_leilao}")
         publicar_lance_invalido(lance, motivo="fora_do_periodo")
         return False
 
-    # Validar se o valor é maior que o atual - validacao 2
     atual = lances.get(id_leilao)
     if atual and valor <= atual["valor"]:
-        print(f"[INVALIDO] Lance {valor} <= atual ({atual['valor']})")
         publicar_lance_invalido(lance, motivo="valor_menor_ou_igual")
         return False
 
-    # Se passou pelas validações, registra o lance
     lances[id_leilao] = {"id_usuario": id_usuario, "valor": valor}
-    print(f"[VALIDO] Novo lance {valor} registrado para {id_leilao}")
     publicar_lance_validado(lance)
     return True
 
@@ -135,5 +122,5 @@ def iniciar_consumo_rabbit():
 if __name__ == "__main__":
     threading.Thread(target=iniciar_consumo_rabbit, daemon=True).start()
 
-    print("Servidor Flask MS-Lance em http://localhost:5001")
+    print("Servidor MS-Lance em http://localhost:5001")
     app.run(host="0.0.0.0", port=5001)
