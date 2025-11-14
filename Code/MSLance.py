@@ -1,0 +1,126 @@
+import json
+import threading
+from datetime import datetime
+from flask import Flask, request, jsonify
+from rabbitmq_utils import RabbitMQHelper
+
+app = Flask(__name__)
+
+leiloes_ativos = {}
+lances = {}
+
+MSLance = RabbitMQHelper(exchange='leiloes_status')
+MSNotificacao = RabbitMQHelper(exchange='notificacoes')
+
+
+def callback_leilao(ch, method, properties, body):
+    evento = method.routing_key
+    dados = json.loads(body)
+
+    if evento == 'leilao_iniciado':
+        inicio = datetime.fromisoformat(dados["data_hora_inicio"])
+        fim = datetime.fromisoformat(dados["data_hora_fim"])
+        leiloes_ativos[dados["id_leilao"]] = {"inicio": inicio, "fim": fim}
+
+    elif evento == 'leilao_finalizado':
+        id_leilao = dados["id_leilao"]
+        vencedor = lances.get(id_leilao)
+        if vencedor:
+            mensagem = {
+                "id_leilao": id_leilao,
+                "id_usuario": vencedor["id_usuario"],
+                "valor": vencedor["valor"]
+            }
+            MSNotificacao.publish(
+                routing_key='leilao_vencedor',
+                body=json.dumps(mensagem)
+            )
+        leiloes_ativos.pop(id_leilao, None)
+
+
+def adicionar_lance(lance):
+    id_leilao = lance["id_leilao"]
+    id_usuario = lance["id_usuario"]
+    valor = float(lance["valor"])
+    agora = datetime.now()
+
+    if id_leilao not in leiloes_ativos:
+        publicar_lance_invalido(lance, motivo="leilao_finalizado")
+        return False
+
+    periodo = leiloes_ativos[id_leilao]
+    if not (periodo["inicio"] <= agora <= periodo["fim"]):
+        publicar_lance_invalido(lance, motivo="fora_do_periodo")
+        return False
+
+    atual = lances.get(id_leilao)
+    if atual and valor <= atual["valor"]:
+        publicar_lance_invalido(lance, motivo="valor_menor_ou_igual")
+        return False
+
+    lances[id_leilao] = {"id_usuario": id_usuario, "valor": valor}
+    publicar_lance_validado(lance)
+    return True
+
+
+def publicar_lance_validado(lance):
+    MSNotificacao.publish(routing_key='lance_validado', body=json.dumps(lance))
+
+
+def publicar_lance_invalido(lance, motivo="desconhecido"):
+    mensagem = {**lance, "motivo": motivo}
+    MSNotificacao.publish(routing_key='lance_invalidado', body=json.dumps(mensagem))
+
+
+@app.route("/lances", methods=["POST"])
+def endpoint_lances():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"erro": "JSON inválido"}), 400
+
+        campos = ["id_leilao", "id_usuario", "valor"]
+        if not all(c in data for c in campos):
+            return jsonify({"erro": "Campos obrigatórios: id_leilao, id_usuario, valor"}), 400
+
+        valido = adicionar_lance(data)
+        status = 201 if valido else 400
+        resposta = {
+            "status": "aceito" if valido else "rejeitado",
+            "lance": data
+        }
+        return jsonify(resposta), status
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 400
+
+@app.route("/lances/ultimos", methods=["GET"])
+def listar_ultimos_lances():
+    try:
+        return jsonify(lances), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route("/", methods=["GET"])
+def raiz():
+    return jsonify({"mensagem": "MS-Lance ativo"}), 200
+
+
+def iniciar_consumo_rabbit():
+    MSLance.declare_exchange('lances')
+    q_leilao = MSLance.declare_queue(queue='', exclusive=True).method.queue
+
+    MSLance.bind_queue('leiloes_status', q_leilao, 'leilao_iniciado')
+    MSLance.bind_queue('leiloes_status', q_leilao, 'leilao_finalizado')
+
+    MSLance.receive(q_leilao, callback_leilao)
+    print("MS Lance aguardando eventos de leilão...")
+    MSLance.consume()
+
+
+if __name__ == "__main__":
+    threading.Thread(target=iniciar_consumo_rabbit, daemon=True).start()
+
+    print("Servidor MS-Lance em http://localhost:5001")
+    app.run(host="0.0.0.0", port=5001)
